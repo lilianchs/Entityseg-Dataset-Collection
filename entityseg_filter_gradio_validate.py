@@ -21,10 +21,10 @@ def overlay_segments_on_image(img_np, annotations):
     return overlaid
 
 
-def visualize_and_save(img_np, overlaid_img, save_path):
+def visualize_and_save(img_np, overlaid_img, save_path, image_id):
     fig, axes = plt.subplots(1, 2, figsize=(12, 6))
     axes[0].imshow(img_np)
-    axes[0].set_title("Original Image")
+    axes[0].set_title(f"Image (ID: {image_id})")
     axes[0].axis("off")
 
     axes[1].imshow(overlaid_img)
@@ -57,6 +57,7 @@ def main():
 
     for h5_file in h5_files:
         with h5py.File(h5_file, 'r') as data:
+            image_id = data['image_id'][()]
             valid_segment_ids = data['valid_segment_ids'][()]
 
         img_key = os.path.splitext(os.path.basename(h5_file))[0]
@@ -72,7 +73,7 @@ def main():
 
         overlaid_img = overlay_segments_on_image(img_np, valid_annotations)
         save_path = os.path.join(args.save_dir, f"{img_key}.png")
-        visualize_and_save(img_np, overlaid_img, save_path)
+        visualize_and_save(img_np, overlaid_img, save_path, image_id)
 
 if __name__ == "__main__":
     main()

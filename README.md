@@ -18,6 +18,7 @@ python entityseg_filter_gradio.py
 
 ### Press Load Data
 * It will load in one sample image with original rgb on left and with all segments overlaid on the right
+* Sometimes the next image won't load--in that  case, just press Refresh (load new batch)
 
 ### Annotate
 * The image on the right starts off with all segments–to discard a segment, just press the segment on the right image to discard it (it should update the visualizations); repeat this with all undesired segments until you have the final set
@@ -32,6 +33,10 @@ python entityseg_filter_gradio.py
 python entityseg_filter_gradio_validate.py --h5_dir {path to h5_dir} --save_dir {path to save_dir} --ann_pat {associated ann path that you used for gradio} --img_dir {associated image dir} 
 ```
 * It should visualize the image and only the segments that you chose (as saved in the h5 directory)
+
+## Consolidation
+* At the end, since we are aiming for a dataset of 1000, we just need the path to your save directory containing all the .h5 files
+* For each split of 10k, maybe aim for ~340 .h5 files (can see how many you have by counting the # of files in your h5 save directory)
 
 ## Visual Examples
 ![alt text](https://github.com/lilianchs/Entityseg-Dataset-Collection/blob/main/images/entityseg_example_segments.png "Visual Examples")

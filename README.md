@@ -35,3 +35,6 @@ python entityseg_filter_gradio.py
 python entityseg_filter_gradio_validate.py --h5_dir {path to h5_dir} --save_dir {path to save_dir} --ann_pat {associated ann path that you used for gradio} --img_dir {associated image dir} 
 ```
 * It should visualize the image and only the segments that you chose (as saved in the h5 directory)
+
+## Visual Examples
+![alt text](https://github.com/lilianchs/Entityseg-Dataset-Collection/images/entityseg_example_segments.png "Visual Examples")

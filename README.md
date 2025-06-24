@@ -1,10 +1,7 @@
 # Entityseg-Dataset-Collection
 Dataset collection gradio for Entityseg Segments for a more spelke-aligned dataset
 
-## SETUP + RUN
-```python
-pip install -e . 
-```
+## RUN
 ```python
 python entityseg_filter_gradio.py
 ```
@@ -37,4 +34,4 @@ python entityseg_filter_gradio_validate.py --h5_dir {path to h5_dir} --save_dir 
 * It should visualize the image and only the segments that you chose (as saved in the h5 directory)
 
 ## Visual Examples
-![alt text](https://github.com/lilianchs/Entityseg-Dataset-Collection/images/entityseg_example_segments.png "Visual Examples")
+![alt text](https://github.com/lilianchs/Entityseg-Dataset-Collection/blob/main/images/entityseg_example_segments.png "Visual Examples")

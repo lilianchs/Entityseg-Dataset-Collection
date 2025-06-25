@@ -55,13 +55,21 @@ def main():
     entity_seg = json.load(open(args.ann_path))
     annotations = entity_seg['annotations']
 
+    valid_extensions = ['.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG']
+
     for h5_file in h5_files:
         with h5py.File(h5_file, 'r') as data:
             image_id = data['image_id'][()]
             valid_segment_ids = data['valid_segment_ids'][()]
 
         img_key = os.path.splitext(os.path.basename(h5_file))[0]
-        img_path = os.path.join(args.img_dir, f'{img_key}.jpg')
+
+        # Find the matching image with any of the valid extensions
+        for ext in valid_extensions:
+            img_path = os.path.join(args.img_dir, f'{img_key}{ext}')
+            if os.path.exists(img_path):
+                break
+
         assert os.path.exists(img_path), f"Image file not found: {img_path}"
 
         valid_annotations = [ann for ann in annotations if ann['id'] in valid_segment_ids]

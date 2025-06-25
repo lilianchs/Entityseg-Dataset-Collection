@@ -11,6 +11,9 @@ import colorsys
 from PIL import Image
 
 class EntitySegAnnotator:
+    """
+    Annotation tool for EntitySeg dataset.
+    """
     def __init__(self):
         self.data = None
         self.image_dir = None
@@ -22,15 +25,22 @@ class EntitySegAnnotator:
         self.current_segments = []
         self.deleted_segments = set()
         self.deletion_history = []  # Track order of deletions for undo
-        self.jumped_to_specific = False  # Track if we jumped to a specific image..
+        self.jumped_to_specific = False  # Track if we jumped to a specific image
+        self.segment_map = None
+
+    def get_filename_without_extension(self, filename):
+        return os.path.splitext(filename)[0]
+
+    def get_file_extension(self, filename):
+        return os.path.splitext(filename)[1]
 
     def load_json_data(self, json_path, image_dir, save_dir, discard_dir):
-        """Load JSON data and validate/create paths"""
         if not os.path.exists(json_path):
             return "Error: JSON file does not exist", None, None
         if not os.path.exists(image_dir):
             return "Error: Image directory does not exist", None, None
 
+        # Create directories if they don't exist
         os.makedirs(save_dir, exist_ok=True)
         os.makedirs(discard_dir, exist_ok=True)
 
@@ -41,26 +51,30 @@ class EntitySegAnnotator:
         self.image_dir = image_dir
         self.save_dir = save_dir
         self.discard_dir = discard_dir
+
+        # Get already processed files from both save and discard directories
         self.processed = set()
 
-        # Check save directory
         for h5_file in Path(save_dir).glob("*.h5"):
-            self.processed.add(h5_file.stem + ".jpg")
-
-        # Check discard directory
+            self.processed.add(h5_file.stem)
         for h5_file in Path(discard_dir).glob("*.h5"):
-            self.processed.add(h5_file.stem + ".jpg")
+            self.processed.add(h5_file.stem)
 
-        # Load initial batch
+        # initial batch
         batch_info = self.load_batch()
         if batch_info.startswith("Error"):
             return batch_info, None, None
 
-        # Display first image
+        # first image
         if self.current_batch:
             self.current_image_data = self.current_batch[0]
 
         return batch_info, *self.display_current_image()
+
+    def is_supported_image_format(self, filename):
+        """Check if the file has a supported image extension"""
+        ext = self.get_file_extension(filename).lower()
+        return ext in ['.jpg', '.jpeg', '.png']
 
     def load_batch(self):
         """Load 20 random unprocessed images"""
@@ -68,7 +82,12 @@ class EntitySegAnnotator:
         available_images = []
         for img in self.data['images']:
             filename = img['file_name']
-            if filename not in self.processed:
+            # Check if it's a supported format
+            if not self.is_supported_image_format(filename):
+                print(f"Skipping unsupported format: {filename}")
+                continue
+            filename_no_ext = self.get_filename_without_extension(filename)
+            if filename_no_ext not in self.processed:
                 # Also check if the actual image file exists
                 img_path = os.path.join(self.image_dir, filename)
                 if os.path.exists(img_path):
@@ -77,6 +96,7 @@ class EntitySegAnnotator:
         if not available_images:
             return "Error: No more images to process"
 
+        # Sample up to 20 images
         sample_size = min(20, len(available_images))
         self.current_batch = random.sample(available_images, sample_size)
         self.current_idx = 0
@@ -96,8 +116,14 @@ class EntitySegAnnotator:
 
     def decode_rle_mask(self, segmentation, height, width):
         """Decode RLE mask from COCO format"""
-        assert isinstance(segmentation, dict)
-        rle = segmentation
+        if isinstance(segmentation, dict):
+            rle = segmentation
+        else:
+            # If it's polygon format, convert to RLE
+            rle = mask_utils.frPyObjects(segmentation, height, width)
+            if isinstance(rle, list):
+                rle = mask_utils.merge(rle)
+
         mask = mask_utils.decode(rle)
         return mask
 
@@ -112,29 +138,41 @@ class EntitySegAnnotator:
 
     def display_current_image(self):
         """Display current image and its segments"""
+        # Check if we have an image to display
         if not self.current_image_data:
+            # Try to get from batch if available
             if self.current_batch and 0 <= self.current_idx < len(self.current_batch):
                 self.current_image_data = self.current_batch[self.current_idx]
             else:
                 return None, None
+
+        # Ensure the image format is supported
+        if not self.is_supported_image_format(self.current_image_data['file_name']):
+            return None, None
 
         image_id = self.current_image_data['id']
         filename = self.current_image_data['file_name']
         height = self.current_image_data['height']
         width = self.current_image_data['width']
 
-        # load image
+        # Load actual image
         img_path = os.path.join(self.image_dir, filename)
-        original_img = cv2.imread(img_path)
-        original_img = cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB)
+        original_img = cv2.imread(img_path, cv2.IMREAD_COLOR)
+        if original_img is None:
+            # Fallback to placeholder if image can't be loaded
+            print(f"Warning: Could not load image {img_path}")
+            original_img = np.ones((height, width, 3), dtype=np.uint8) * 200
+        else:
+            original_img = cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB)
 
+        # Get annotations
         self.current_segments = self.get_image_annotations(image_id)
 
-        # overlay image
+        # Create overlay image
         overlay_img = original_img.copy()
         colors = self.generate_colors(len(self.current_segments))
 
-        # create interactive pixel mask
+        # Create a mask to track which segment each pixel belongs to
         segment_map = np.zeros((height, width), dtype=np.int32) - 1
 
         for idx, (ann, color) in enumerate(zip(self.current_segments, colors)):
@@ -147,10 +185,13 @@ class EntitySegAnnotator:
                 # Update segment map
                 segment_map[mask > 0] = idx
 
+        # Store segment map for click handling
         self.segment_map = segment_map
 
+        # Convert to PIL for Gradio
         original_pil = Image.fromarray(original_img)
         overlay_pil = Image.fromarray(overlay_img)
+
         return original_pil, overlay_pil
 
     def handle_click(self, evt: gr.SelectData):
@@ -183,7 +224,10 @@ class EntitySegAnnotator:
             _, overlay = self.display_current_image()
             return "No deletions to undo", overlay
 
+        # Get the last deleted segment ID
         last_deleted_id = self.deletion_history.pop()
+
+        # Remove from deleted set
         self.deleted_segments.discard(last_deleted_id)
 
         # Redraw overlay
@@ -200,12 +244,15 @@ class EntitySegAnnotator:
 
         # Check if it's a filename ending with .h5
         if identifier.endswith('.h5'):
-            jpg_filename = identifier.replace('.h5', '.jpg')
+            # Get the base filename without .h5
+            base_filename = identifier.replace('.h5', '')
+            # Find image by matching the base filename (without extension)
             for img in self.data['images']:
-                if img['file_name'] == jpg_filename:
+                if self.get_filename_without_extension(img['file_name']) == base_filename:
                     target_image = img
                     break
         else:
+            # Try to parse as image ID
             try:
                 image_id = int(identifier)
                 # Find image by ID
@@ -219,7 +266,11 @@ class EntitySegAnnotator:
         if not target_image:
             return f"Image not found: {identifier}", None, None
 
-        # check exists
+        # Check if it's a supported format
+        if not self.is_supported_image_format(target_image['file_name']):
+            return f"Unsupported image format: {target_image['file_name']}", None, None
+
+        # Check if image file exists
         img_path = os.path.join(self.image_dir, target_image['file_name'])
         if not os.path.exists(img_path):
             return f"Image file not found: {target_image['file_name']}", None, None
@@ -229,11 +280,14 @@ class EntitySegAnnotator:
         self.deleted_segments = set()
         self.deletion_history = []
         self.jumped_to_specific = True
-        self.current_segments = self.get_image_annotations(target_image['id']) # load relevant segs
+
+        # Load the segments for this image
+        self.current_segments = self.get_image_annotations(target_image['id'])
 
         # If this image was previously processed, we can still load it for editing
         status = f"Loaded image: {target_image['file_name']} (ID: {target_image['id']})"
-        if target_image['file_name'] in self.processed:
+        filename_no_ext = self.get_filename_without_extension(target_image['file_name'])
+        if filename_no_ext in self.processed:
             status += " - Previously processed (will overwrite if saved)"
 
         # Display the image
@@ -243,7 +297,7 @@ class EntitySegAnnotator:
     def save_current(self):
         """Save current image and remaining segments to H5"""
         if not self.current_image_data:
-            return "No image to save"
+            return "No image to save", None, None
 
         # Get valid segment IDs
         valid_segment_ids = [
@@ -253,23 +307,41 @@ class EntitySegAnnotator:
 
         # Create H5 filename
         filename = self.current_image_data['file_name']
-        h5_filename = filename.replace('.jpg', '.h5')
+        filename_no_ext = self.get_filename_without_extension(filename)
+        h5_filename = filename_no_ext + '.h5'
         h5_path = os.path.join(self.save_dir, h5_filename)
+
+        # Save to H5
         with h5py.File(h5_path, 'w') as f:
             f.create_dataset('image_id', data=self.current_image_data['id'])
-            f.create_dataset('valid_segment_ids', data=valid_segment_ids)
+            # Handle empty list case for H5
+            if valid_segment_ids:
+                f.create_dataset('valid_segment_ids', data=valid_segment_ids)
+            else:
+                # Create empty dataset with proper dtype
+                f.create_dataset('valid_segment_ids', data=np.array([], dtype=np.int64))
 
-        self.processed.add(filename) # mark processed
+        # Mark as processed (store without extension)
+        self.processed.add(filename_no_ext)
+        print(f"Discarded {h5_filename}")
 
+        # Clear current state</        self.deleted_segments = set()
+        self.deletion_history = []
+
+        # If we jumped to a specific image
         if self.jumped_to_specific:
             self.jumped_to_specific = False
+            self.current_image_data = None
+            # If we have a batch in progress, continue from where we left off
             if self.current_batch and self.current_idx < len(self.current_batch):
                 self.current_image_data = self.current_batch[self.current_idx]
-                return self.next_image()
+                status = f"Image saved ({len(valid_segment_ids)} segments kept). Returning to batch - showing image {self.current_idx + 1}/{len(self.current_batch)}"
+                orig, overlay = self.display_current_image()
+                return status, orig, overlay
             else:
-                self.current_image_data = None
-                return "Image saved. Load a new batch or jump to another image.", None, None
+                return f"Image saved ({len(valid_segment_ids)} segments kept). Load a new batch or jump to another image.", None, None
 
+        # Normal batch mode - move to next image
         return self.next_image()
 
     def discard_current(self):
@@ -279,38 +351,59 @@ class EntitySegAnnotator:
 
         # Create empty H5 file in discard folder
         filename = self.current_image_data['file_name']
-        h5_filename = filename.replace('.jpg', '.h5')
+        filename_no_ext = self.get_filename_without_extension(filename)
+        h5_filename = filename_no_ext + '.h5'
         h5_path = os.path.join(self.discard_dir, h5_filename)
-        with h5py.File(h5_path, 'w') as f:
-            pass
 
-        self.processed.add(filename) # mark processed
+        # Create empty H5 file
+        try:
+            with h5py.File(h5_path, 'w') as f:
+                # Just create an empty file as a marker
+                pass
+            print(f"Successfully discarded {h5_filename}")
+        except Exception as e:
+            print(f"Error discarding {h5_filename}: {str(e)}")
+            return f"Error discarding file: {str(e)}", None, None
 
-        # return to normal flow after jump
+        # Mark as processed
+        self.processed.add(filename)
+
+        # Clear current state
+        self.deleted_segments = set()
+        self.deletion_history = []
+
+        # If we jumped to a specific image
         if self.jumped_to_specific:
             self.jumped_to_specific = False
-            # cont with current batch
+            self.current_image_data = None
+            # If we have a batch in progress, continue from where we left off
             if self.current_batch and self.current_idx < len(self.current_batch):
                 self.current_image_data = self.current_batch[self.current_idx]
-                return self.next_image()
+                status = f"Image discarded. Returning to batch - showing image {self.current_idx + 1}/{len(self.current_batch)}"
+                orig, overlay = self.display_current_image()
+                return status, orig, overlay
             else:
-                self.current_image_data = None
                 return "Image discarded. Load a new batch or jump to another image.", None, None
 
+        # Normal batch mode - move to next image
         return self.next_image()
 
     def next_image(self):
         """Move to next image in batch"""
-        self.current_idx += 1
+        # Clear current state
         self.deleted_segments = set()
-        self.deletion_history = []  # Reset deletion history
-        self.jumped_to_specific = False  # reset jump flag
+        self.deletion_history = []
+        self.jumped_to_specific = False
+
+        # Increment index
+        self.current_idx += 1
 
         if self.current_idx >= len(self.current_batch):
-            # batch complete
+            # Clear current image data when batch is complete
             self.current_image_data = None
             return "Batch complete. Click 'Refresh' to load more images.", None, None
 
+        # Set current image from batch
         self.current_image_data = self.current_batch[self.current_idx]
 
         status = f"Showing image {self.current_idx + 1}/{len(self.current_batch)}"
@@ -319,7 +412,7 @@ class EntitySegAnnotator:
 
     def refresh_batch(self):
         """Load a new batch of images"""
-        # reset states
+        # Reset states
         self.jumped_to_specific = False
         self.current_image_data = None
 
@@ -327,18 +420,22 @@ class EntitySegAnnotator:
         if batch_info.startswith("Error"):
             return batch_info, None, None
 
-        # set first img
+        # Set the first image from the new batch
         if self.current_batch:
             self.current_image_data = self.current_batch[0]
 
+        # Display first image of new batch
         return batch_info, *self.display_current_image()
 
+
+# Create annotator instance
 annotator = EntitySegAnnotator()
 
-# gradio interface
+# Create Gradio interface
 with gr.Blocks(title="EntitySeg Annotation Tool") as app:
     gr.Markdown("# EntitySeg Dataset Annotation Tool")
     gr.Markdown("Click on segments in the right panel to delete them. Save only the segments you want to keep.")
+    gr.Markdown("**Supported image formats:** .jpg, .JPEG, .png")
 
     with gr.Row():
         json_path = gr.Textbox(label="Path to JSON annotations file", placeholder="/path/to/annotations.json")
@@ -346,7 +443,7 @@ with gr.Blocks(title="EntitySeg Annotation Tool") as app:
 
     with gr.Row():
         save_dir = gr.Textbox(label="Path to H5 save directory", placeholder="/path/to/save/directory")
-        discard_dir = gr.Textbox(label="Path to discard folder", placeholder="/path/to/discard/directory")
+        discard_dir = gr.Textbox(label="Path to discard directory", placeholder="/path/to/discard/directory")
 
     load_btn = gr.Button("Load Data", variant="primary")
 
@@ -371,7 +468,7 @@ with gr.Blocks(title="EntitySeg Annotation Tool") as app:
         undo_btn = gr.Button("Undo Last Deletion")
         refresh_btn = gr.Button("Refresh (Load New Batch)")
 
-    # ignore
+    # Bottom panel showing batch preview (simplified version)
     batch_preview = gr.Gallery(label="Current Batch Preview", columns=10, height=100)
 
     # Event handlers
@@ -410,11 +507,7 @@ with gr.Blocks(title="EntitySeg Annotation Tool") as app:
     save_btn.click(
         fn=lambda: annotator.save_current(),
         inputs=[],
-        outputs=[status_text]
-    ).then(
-        fn=lambda: annotator.display_current_image(),
-        inputs=[],
-        outputs=[original_image, overlay_image]
+        outputs=[status_text, original_image, overlay_image]
     )
 
     discard_btn.click(

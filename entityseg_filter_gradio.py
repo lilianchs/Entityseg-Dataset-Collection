@@ -65,19 +65,16 @@ class EntitySegAnnotator:
         if batch_info.startswith("Error"):
             return batch_info, None, None
 
-        # first image
         if self.current_batch:
             self.current_image_data = self.current_batch[0]
 
         return batch_info, *self.display_current_image()
 
     def is_supported_image_format(self, filename):
-        """Check if the file has a supported image extension"""
         ext = self.get_file_extension(filename).lower()
         return ext in ['.jpg', '.jpeg', '.png']
 
     def load_batch(self):
-        """Load 20 random unprocessed images"""
         # Filter available images
         available_images = []
         for img in self.data['images']:
@@ -111,24 +108,14 @@ class EntitySegAnnotator:
         return f"Loaded {sample_size} images. Showing image 1/{sample_size}"
 
     def get_image_annotations(self, image_id):
-        """Get all annotations for a specific image"""
         return [ann for ann in self.data['annotations'] if ann['image_id'] == image_id]
 
     def decode_rle_mask(self, segmentation, height, width):
-        """Decode RLE mask from COCO format"""
-        if isinstance(segmentation, dict):
-            rle = segmentation
-        else:
-            # If it's polygon format, convert to RLE
-            rle = mask_utils.frPyObjects(segmentation, height, width)
-            if isinstance(rle, list):
-                rle = mask_utils.merge(rle)
-
+        rle = segmentation
         mask = mask_utils.decode(rle)
         return mask
 
     def generate_colors(self, n):
-        """Generate n distinct colors"""
         colors = []
         for i in range(n):
             hue = i / n
@@ -137,7 +124,6 @@ class EntitySegAnnotator:
         return colors
 
     def display_current_image(self):
-        """Display current image and its segments"""
         # Check if we have an image to display
         if not self.current_image_data:
             # Try to get from batch if available
@@ -158,12 +144,7 @@ class EntitySegAnnotator:
         # Load actual image
         img_path = os.path.join(self.image_dir, filename)
         original_img = cv2.imread(img_path, cv2.IMREAD_COLOR)
-        if original_img is None:
-            # Fallback to placeholder if image can't be loaded
-            print(f"Warning: Could not load image {img_path}")
-            original_img = np.ones((height, width, 3), dtype=np.uint8) * 200
-        else:
-            original_img = cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB)
+        original_img = cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB)
 
         # Get annotations
         self.current_segments = self.get_image_annotations(image_id)
@@ -185,10 +166,8 @@ class EntitySegAnnotator:
                 # Update segment map
                 segment_map[mask > 0] = idx
 
-        # Store segment map for click handling
+        # store segment map for interactive handling
         self.segment_map = segment_map
-
-        # Convert to PIL for Gradio
         original_pil = Image.fromarray(original_img)
         overlay_pil = Image.fromarray(overlay_img)
 
@@ -224,10 +203,7 @@ class EntitySegAnnotator:
             _, overlay = self.display_current_image()
             return "No deletions to undo", overlay
 
-        # Get the last deleted segment ID
         last_deleted_id = self.deletion_history.pop()
-
-        # Remove from deleted set
         self.deleted_segments.discard(last_deleted_id)
 
         # Redraw overlay
@@ -255,7 +231,6 @@ class EntitySegAnnotator:
             # Try to parse as image ID
             try:
                 image_id = int(identifier)
-                # Find image by ID
                 for img in self.data['images']:
                     if img['id'] == image_id:
                         target_image = img
@@ -290,7 +265,6 @@ class EntitySegAnnotator:
         if filename_no_ext in self.processed:
             status += " - Previously processed (will overwrite if saved)"
 
-        # Display the image
         orig, overlay = self.display_current_image()
         return status, orig, overlay
 
@@ -324,15 +298,11 @@ class EntitySegAnnotator:
         # Mark as processed (store without extension)
         self.processed.add(filename_no_ext)
         print(f"Discarded {h5_filename}")
-
-        # Clear current state</        self.deleted_segments = set()
         self.deletion_history = []
 
-        # If we jumped to a specific image
         if self.jumped_to_specific:
             self.jumped_to_specific = False
             self.current_image_data = None
-            # If we have a batch in progress, continue from where we left off
             if self.current_batch and self.current_idx < len(self.current_batch):
                 self.current_image_data = self.current_batch[self.current_idx]
                 status = f"Image saved ({len(valid_segment_ids)} segments kept). Returning to batch - showing image {self.current_idx + 1}/{len(self.current_batch)}"
@@ -341,7 +311,6 @@ class EntitySegAnnotator:
             else:
                 return f"Image saved ({len(valid_segment_ids)} segments kept). Load a new batch or jump to another image.", None, None
 
-        # Normal batch mode - move to next image
         return self.next_image()
 
     def discard_current(self):
@@ -365,18 +334,15 @@ class EntitySegAnnotator:
             print(f"Error discarding {h5_filename}: {str(e)}")
             return f"Error discarding file: {str(e)}", None, None
 
-        # Mark as processed
+        # update states
         self.processed.add(filename)
-
-        # Clear current state
         self.deleted_segments = set()
         self.deletion_history = []
 
-        # If we jumped to a specific image
+        # If we jumped to a specific image, handle that differently
         if self.jumped_to_specific:
             self.jumped_to_specific = False
             self.current_image_data = None
-            # If we have a batch in progress, continue from where we left off
             if self.current_batch and self.current_idx < len(self.current_batch):
                 self.current_image_data = self.current_batch[self.current_idx]
                 status = f"Image discarded. Returning to batch - showing image {self.current_idx + 1}/{len(self.current_batch)}"
@@ -385,7 +351,6 @@ class EntitySegAnnotator:
             else:
                 return "Image discarded. Load a new batch or jump to another image.", None, None
 
-        # Normal batch mode - move to next image
         return self.next_image()
 
     def next_image(self):
@@ -394,12 +359,9 @@ class EntitySegAnnotator:
         self.deleted_segments = set()
         self.deletion_history = []
         self.jumped_to_specific = False
-
-        # Increment index
         self.current_idx += 1
 
         if self.current_idx >= len(self.current_batch):
-            # Clear current image data when batch is complete
             self.current_image_data = None
             return "Batch complete. Click 'Refresh' to load more images.", None, None
 
@@ -427,11 +389,9 @@ class EntitySegAnnotator:
         # Display first image of new batch
         return batch_info, *self.display_current_image()
 
-
-# Create annotator instance
 annotator = EntitySegAnnotator()
 
-# Create Gradio interface
+# gradio interface
 with gr.Blocks(title="EntitySeg Annotation Tool") as app:
     gr.Markdown("# EntitySeg Dataset Annotation Tool")
     gr.Markdown("Click on segments in the right panel to delete them. Save only the segments you want to keep.")

@@ -1,9 +1,15 @@
 # Entityseg-Dataset-Collection
 Dataset collection gradio for Entityseg Segments for a more spelke-aligned dataset
 
+## SETUP
+```python
+pip install -e .
+```
+For consolidation, will need ccwm package
+
 ## RUN
 ```python
-python entityseg_filter_gradio.py
+python collection/entityseg_filter_gradio.py
 ```
 
 ## How to use:
@@ -30,7 +36,7 @@ python entityseg_filter_gradio.py
 ## Validate
 * To make sure everything is aligned, feel free to periodically run the validation like so:
 ```python
-python entityseg_filter_gradio_validate.py --h5_dir {path to h5_dir} --save_dir {path to save_dir} --ann_pat {associated ann path that you used for gradio} --img_dir {associated image dir} 
+python collection/entityseg_filter_gradio_validate.py --h5_dir {path to h5_dir} --save_dir {path to save_dir} --ann_pat {associated ann path that you used for gradio} --img_dir {associated image dir} 
 ```
 * It should visualize the image and only the segments that you chose (as saved in the h5 directory)
 

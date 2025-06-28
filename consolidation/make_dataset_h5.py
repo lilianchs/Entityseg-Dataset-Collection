@@ -27,17 +27,21 @@ def get_seg_map(img_path, annotations, size=256):
     image_og = cv2.imread(img_path)[:, :, ::-1]  # BGR to RGB
     h, w, _ = image_og.shape
     all_segs = []
+    all_ids = []
 
     image, cropped_segs, annotations = crop(image_og, annotations, size=size)
 
-    for id, seg in cropped_segs.items():
-        if (seg.sum() / (size * size)) * 100 <= 0.2:
-            continue
-        all_segs.append(seg)
+    for annot in annotations:
+        id = (annot['iscrowd'], annot['area'], annot['image_id'], annot['category_id'], annot['attribute'], annot['id'])
+        seg_mask = cropped_segs[id]
+
+        if (seg_mask.sum() / (size * size)) * 100 > 0.2:
+            all_segs.append(seg_mask)
+            all_ids.append(annot['id'])
 
     seg_map = segments_to_rgb(all_segs)
 
-    return image, seg_map, all_segs
+    return image, seg_map, all_segs, all_ids
 
 def main():
     parser = argparse.ArgumentParser(
@@ -45,6 +49,9 @@ def main():
     parser.add_argument("--h5_dirs", type=str, nargs='+', required=True,
                         help="All directories containing h5 files to consolidate")
     parser.add_argument("--h5_save", type=str, required=True, help="Where to save h5 consolidated file")
+
+    parser.add_argument("--vis", action='store_true', help="Visualize consolidated h5 file after saving")
+    parser.add_argument("--vis_dir", type=str, default=None, help="Directory to save visualizations to")
     args = parser.parse_args()
 
     h5_dirs = args.h5_dirs
@@ -111,7 +118,7 @@ def main():
                 assert len(valid_annotations) == len(valid_segment_ids), \
                     f"Mismatch in valid annotations for image {filename}"
 
-                rgb_img, seg_map, all_segs = get_seg_map(img_path, valid_annotations)
+                rgb_img, seg_map, all_segs, all_ids = get_seg_map(img_path, valid_annotations)
                 assert all_segs, f"Empty valid segments"
 
                 # H5 save format
@@ -126,13 +133,67 @@ def main():
                 img_group.create_dataset('segment', data=stacked_segments)
 
                 centroids = compute_segment_centroids(torch.from_numpy(stacked_segments))
-                img_group.create_dataset('centroid', data=centroids)
+                img_group.create_dataset('centroid', data=centroids.numpy())
 
-                img_group.create_dataset('segment_ids', data=valid_segment_ids)
+                img_group.create_dataset('segment_ids', data=np.array(all_ids))
 
                 ct_vis += 1
 
     print(f'Consolidated {ct_vis} examples from {len(h5_dirs)} directories into {h5_save}')
+
+    if args.vis:
+        assert args.vis_dir, "Please input argument for directory to save visualizations to"
+
+        os.makedirs(args.vis_dir, exist_ok=True)
+
+        with h5py.File(h5_save, 'r') as data:
+            print(f"Creating visualizations for {len(data.keys())} images...")
+
+            for i, img_key in enumerate(data.keys()):
+                if i % 50 == 0: print(f'Visualized {i}/{len(data.keys())} files')
+
+                rgb_img = data[img_key]['rgb'][:]
+                seg_map = data[img_key]['seg_map'][:]
+                segments = data[img_key]['segment'][:]
+                centroids = data[img_key]['centroid'][:]
+                n_segments = len(segments)
+
+                fig, axes = plt.subplots(1, 2 + n_segments, figsize=(4 * (2 + n_segments), 4))
+
+                # Col 1: RGB image
+                axes[0].imshow(rgb_img)
+                axes[0].set_title('RGB Image')
+                axes[0].axis('off')
+
+                # Col 2: Segmentation map
+                axes[1].imshow(seg_map)
+                axes[1].set_title('Segmentation Map')
+                axes[1].axis('off')
+
+                # Col 3+: Individual segments with centroids
+                for i, (segment, centroid) in enumerate(zip(segments, centroids)):
+                    ax = axes[2 + i]
+                    ax.imshow(rgb_img)
+
+                    # Overlay segment
+                    overlay = np.zeros((*segment.shape, 4))
+                    overlay[segment > 0] = [1, 1, 0, 0.8]
+                    ax.imshow(overlay)
+
+                    # Plot centroid
+                    ax.plot(centroid[0], centroid[1], 'ro', markersize=8, markeredgecolor='white', markeredgewidth=1)
+
+                    ax.set_title(f'Segment {i + 1}')
+                    ax.axis('off')
+
+                plt.tight_layout()
+
+                # Save figure
+                save_path = os.path.join(args.vis_dir, f"{img_key}.png")
+                plt.savefig(save_path, dpi=150, bbox_inches='tight')
+                plt.close()
+
+        print(f"Visualizations saved to {args.vis_dir}")
 
 if __name__ == "__main__":
     main()

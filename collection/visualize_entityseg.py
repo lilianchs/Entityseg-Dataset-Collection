@@ -67,7 +67,7 @@ def crop(image, annotations_image_id, size=256):
 
     return image_cropped, cropped_segs, all_segs
 
-def get_seg_map(images_dir, filename, image_id, annotation, size=256):
+def get_seg_map(images_dir, filename, image_id, annotation, categories, size=256):
     image_path = os.path.join(images_dir, filename)
     image_og = cv2.imread(image_path)[:, :, ::-1]  # BGR to RGB
     h, w, _ = image_og.shape
@@ -83,8 +83,12 @@ def get_seg_map(images_dir, filename, image_id, annotation, size=256):
         seg_mask = cropped_segs[id]
         category_id = annot['category_id']
 
-        all_segs.append(seg_mask)
-        all_ids.append(annot['id'])
+        for category in categories:
+            if category['id'] == category_id:
+                if category['type'] == 'thing':
+                    if (seg_mask.sum() / (size * size)) * 100 > 0.2:
+                        all_segs.append(seg_mask)
+                        all_ids.append(annot['id'])
 
     exclude_rgb = None
     # if len(exclude_segs) != 0:
@@ -95,8 +99,7 @@ def get_seg_map(images_dir, filename, image_id, annotation, size=256):
 
     return image, seg_map, len(all_segs), all_ids, all_segs
 
-
-def process_and_merge(images_dir, image_data, annotations, vis_dir):
+def process_and_merge(images_dir, image_data, annotations, vis_dir, categories):
     # global vis_info
     np.random.seed(24)
 
@@ -104,24 +107,34 @@ def process_and_merge(images_dir, image_data, annotations, vis_dir):
     image_id = image_data['id']
 
     # Generate segmentation map and related data
-    rgb_img, seg_map, seg_len, all_ids, all_segs = get_seg_map(images_dir, filename, image_id, annotations)
+    rgb_img, seg_map, seg_len, all_ids, all_segs = get_seg_map(images_dir, filename, image_id, annotations, categories)
     assert len(all_ids) == len(all_segs)
 
+    if len(all_segs) > 15:
+        return
+    if len(all_segs) < 3:
+        return
+    if len(all_segs) == 0:
+        return
+
     # set up visual!
-    fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+    try:
+        fig, ax = plt.subplots(1, 2, figsize=(8, 4))
 
-    # Show original image8ax[0].imshow(rgb_img)
-    ax[0].imshow(rgb_img)
-    ax[0].set_title(f'Image (id: {image_id})')
-    ax[1].imshow(seg_map)
-    ax[1].set_title(f'Segment Map: {seg_len}')
-    # if exclude_len != 0:
-    #     ax[2].set_title(f'Non-Stuff Excluded Segment: {exclude_len}')
-    #     ax[2].imshow(exclude_map)
+        # Show original image8ax[0].imshow(rgb_img)
+        ax[0].imshow(rgb_img)
+        ax[0].set_title(f'Image (id: {image_id})')
+        ax[1].imshow(seg_map)
+        ax[1].set_title(f'Segment Map: {seg_len}')
+        # if exclude_len != 0:
+        #     ax[2].set_title(f'Non-Stuff Excluded Segment: {exclude_len}')
+        #     ax[2].imshow(exclude_map)
 
-    merged_path = os.path.join(vis_dir, f"{filename}" + ".png")
-    fig.savefig(merged_path, bbox_inches='tight', pad_inches=0)
-    plt.close(fig)
+        merged_path = os.path.join(vis_dir, f"{filename}" + ".png")
+        fig.savefig(merged_path, bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+    except:
+        print(f"Error: visualizing seg len of {seg_len}")
     return
 
 if __name__ == "__main__":
@@ -171,7 +184,7 @@ if __name__ == "__main__":
     print(f'Printing from Image {args.start} to {args.end} for {args.end-args.start} total images to visualize')
 
     for ct, images in enumerate(data['images'][args.start:args.end]):
-        process_and_merge(images_dir, images, annotation, vis_dir)
+        process_and_merge(images_dir, images, annotation, vis_dir, categories)
         if ct % 100 == 0:
             print(f'Image {ct} of {args.end-args.start} visualized')
 

@@ -11,6 +11,9 @@ import colorsys
 from PIL import Image
 import time
 
+os.environ['GRADIO_TEMP_DIR'] = os.path.expanduser('~/gradio_temp')
+os.makedirs(os.path.expanduser('~/gradio_temp'), exist_ok=True)
+
 class EntitySegAnnotator:
     """
     Annotation tool for EntitySeg dataset.
@@ -541,4 +544,4 @@ with gr.Blocks(title="EntitySeg Annotation Tool") as app:
     )
 
 if __name__ == "__main__":
-    app.launch()
+    app.launch(share=True)

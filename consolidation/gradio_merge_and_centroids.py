@@ -9,6 +9,10 @@ from datetime import datetime
 from PIL import Image, ImageDraw
 import io
 
+# Fix for Gradio temp directory permissions
+os.environ['GRADIO_TEMP_DIR'] = os.path.expanduser('~/gradio_temp')
+os.makedirs(os.path.expanduser('~/gradio_temp'), exist_ok=True)
+
 class SegmentCombinerApp:
     def __init__(self):
         self.h5_path = None
@@ -186,14 +190,10 @@ class SegmentCombinerApp:
         self.centroid_edit_mode = False
         self.temp_centroid = None
 
-        # gradio SelectData.index is [x, y]
         x_raw, y_raw = evt.index[0], evt.index[1]
-
-        # Get actual image dimensions
         segments = self.current_data['segment']
         h, w = segments.shape[1], segments.shape[2]
 
-        # Handle coordinate order
         if x_raw < w and y_raw < h:
             x, y = x_raw, y_raw
         elif y_raw < w and x_raw < h:
@@ -201,25 +201,23 @@ class SegmentCombinerApp:
         else:
             return None, f"Click out of bounds: ({x_raw}, {y_raw}) exceeds image size ({w}x{h})"
 
-        # Find which segment was clicked
+        # Find which segment was clicked — reversed priority
         clicked_segments = []
-        for i, seg in enumerate(segments):
-            if seg[y, x] > 0:
+        for i in reversed(range(len(segments))):
+            if segments[i][y, x] > 0:
                 clicked_segments.append(i)
 
-        # If no segment found at exact pixel, check nearby pixels
         if not clicked_segments:
             search_radius = 3
             for dy in range(-search_radius, search_radius + 1):
                 for dx in range(-search_radius, search_radius + 1):
                     ny, nx = y + dy, x + dx
                     if 0 <= ny < h and 0 <= nx < w:
-                        for i, seg in enumerate(segments):
-                            if seg[ny, nx] > 0 and i not in clicked_segments:
+                        for i in reversed(range(len(segments))):
+                            if segments[i][ny, nx] > 0 and i not in clicked_segments:
                                 clicked_segments.append(i)
 
         if clicked_segments:
-            # Select the first found segment
             self.selected_segment = clicked_segments[0]
             self.segments_to_combine = {clicked_segments[0]}
             return self.create_right_panel_image(), f"Selected segment {clicked_segments[0]}"
@@ -231,14 +229,10 @@ class SegmentCombinerApp:
         if self.current_data is None or self.selected_segment is None:
             return None, "Please select a segment from the left panel first"
 
-        # Get click coordinates
         x_raw, y_raw = evt.index[0], evt.index[1]
-
-        # Get actual image dimensions
         segments = self.current_data['segment']
         h, w = segments.shape[1], segments.shape[2]
 
-        # Handle coordinate order
         if x_raw < w and y_raw < h:
             x, y = x_raw, y_raw
         elif y_raw < w and x_raw < h:
@@ -246,27 +240,24 @@ class SegmentCombinerApp:
         else:
             return self.create_right_panel_image(), f"Click out of bounds"
 
-        # If in centroid edit mode, set new centroid position
         if self.centroid_edit_mode:
             self.temp_centroid = (x, y)
             return self.create_right_panel_image(), f"New centroid position: ({x}, {y}). Click 'Confirm Centroid' to save."
 
-        # Otherwise, handle segment selection as before
         clicked_segment = None
-        for i, seg in enumerate(segments):
-            if seg[y, x] > 0:
+        for i in reversed(range(len(segments))):
+            if segments[i][y, x] > 0:
                 clicked_segment = i
                 break
 
-        # If no segment found at exact pixel, check nearby pixels
         if clicked_segment is None:
             search_radius = 3
             for dy in range(-search_radius, search_radius + 1):
                 for dx in range(-search_radius, search_radius + 1):
                     ny, nx = y + dy, x + dx
                     if 0 <= ny < h and 0 <= nx < w:
-                        for i, seg in enumerate(segments):
-                            if seg[ny, nx] > 0:
+                        for i in reversed(range(len(segments))):
+                            if segments[i][ny, nx] > 0:
                                 clicked_segment = i
                                 break
                         if clicked_segment is not None:
@@ -281,7 +272,6 @@ class SegmentCombinerApp:
             else:
                 self.segments_to_combine.add(clicked_segment)
                 status = f"Added segment {clicked_segment} to combination (total: {len(self.segments_to_combine)})"
-
             return self.create_right_panel_image(), status
 
         return self.create_right_panel_image(), f"No valid segment found near ({x}, {y})"
@@ -375,18 +365,17 @@ class SegmentCombinerApp:
             return None, None, "No image loaded"
 
         try:
-            # Get current data
             segments = self.current_data['segment']
 
-            # Check what data exists
             has_centroids = 'centroid' in self.h5_file[self.current_image_key]
             has_segment_ids = 'segment_ids' in self.h5_file[self.current_image_key]
 
-            # Get existing data if available
             centroids = self.h5_file[self.current_image_key]['centroid'][:] if has_centroids else None
             segment_ids = self.h5_file[self.current_image_key]['segment_ids'][:] if has_segment_ids else None
 
-            # Create lists without the deleted segment
+            # Cache the old centroid before modifying
+            old_centroid = list(centroids[self.selected_segment]) if centroids is not None and self.selected_segment < len(centroids) else None
+
             new_segments_list = []
             new_centroids_list = []
             new_segment_ids_list = []
@@ -399,56 +388,49 @@ class SegmentCombinerApp:
                     if segment_ids is not None and i < len(segment_ids):
                         new_segment_ids_list.append(segment_ids[i])
 
-            # Convert lists to arrays
             if new_segments_list:
                 new_segments = np.array(new_segments_list)
                 new_seg_map = self.segments_to_rgb(new_segments_list)
             else:
-                # If no segments left, create empty arrays
                 new_segments = np.zeros((0, 256, 256), dtype=np.uint8)
                 new_seg_map = np.zeros((256, 256, 3), dtype=np.uint8)
 
-            # Delete and recreate segment dataset
             del self.h5_file[self.current_image_key]['segment']
             self.h5_file[self.current_image_key].create_dataset('segment', data=new_segments)
 
-            # Delete and recreate seg_map
             if 'seg_map' in self.h5_file[self.current_image_key]:
                 del self.h5_file[self.current_image_key]['seg_map']
             self.h5_file[self.current_image_key].create_dataset('seg_map', data=new_seg_map)
 
-            # Handle centroids if they exist
             if has_centroids:
                 del self.h5_file[self.current_image_key]['centroid']
                 if new_centroids_list:
                     new_centroids = np.array(new_centroids_list)
                     self.h5_file[self.current_image_key].create_dataset('centroid', data=new_centroids)
                 else:
-                    self.h5_file[self.current_image_key].create_dataset('centroid',
-                                                                        data=np.zeros((0, 2), dtype=np.float32))
+                    self.h5_file[self.current_image_key].create_dataset('centroid', data=np.zeros((0, 2), dtype=np.float32))
+                # Refresh in-memory centroid
+                self.current_data['centroid'] = self.h5_file[self.current_image_key]['centroid'][:]
 
-            # Handle segment_ids if they exist
             if has_segment_ids:
                 del self.h5_file[self.current_image_key]['segment_ids']
                 if new_segment_ids_list:
                     new_segment_ids = np.array(new_segment_ids_list)
                     self.h5_file[self.current_image_key].create_dataset('segment_ids', data=new_segment_ids)
                 else:
-                    self.h5_file[self.current_image_key].create_dataset('segment_ids',
-                                                                        data=np.array([], dtype=segment_ids.dtype))
+                    self.h5_file[self.current_image_key].create_dataset('segment_ids', data=np.array([], dtype=segment_ids.dtype))
 
             self.h5_file.flush()
 
-            # Update current data
             self.current_data['segment'] = new_segments
 
-            # Log the operation
             log_entry = {
                 "timestamp": datetime.now().isoformat(),
                 "filename": self.current_data.get('filename', self.current_image_key),
                 "image_key": self.current_image_key,
                 "action": "delete",
-                "deleted_segment": self.selected_segment
+                "deleted_segment": self.selected_segment,
+                "old_centroid": old_centroid
             }
 
             if self.log_path:
@@ -458,7 +440,6 @@ class SegmentCombinerApp:
                 with open(self.log_path, 'w') as f:
                     json.dump(log_data, f, indent=2)
 
-            # Reset selection
             deleted_segment = self.selected_segment
             self.selected_segment = None
             self.segments_to_combine = set()
